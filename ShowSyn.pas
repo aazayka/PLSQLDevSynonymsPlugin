@@ -26,6 +26,8 @@ var
 
 implementation
 
+{$R *.DFM}
+
 // Plug-In identification, a unique identifier is received and
 // the description is returned
 function IdentifyPlugIn(ID: Integer): PChar;  cdecl;
@@ -101,17 +103,19 @@ begin
     end
   else if (words.count = 1) then
     begin
+      ShowMessage('one word ' + words[0]);
       Result.add('');
       Result.add(words[0]);
     end
   else //2
     begin
+      ShowMessage('2 words ' + words[0] + '-' + words[1]);
       Result.add(words[0]);
       Result.add(words[1]);
     end
 end;
 
-function getSynonymByTable(const SelectedString: string): string;
+function GetSynonymsByTable(const SelectedString: string): TStringList;
 var
   Query: string;
   index: Integer;
@@ -119,18 +123,30 @@ var
   words: TStringList;
 begin
   words :=  ParseSelectedString(SelectedString);
+  ShowMessage(words[0] + '-' + words[1]);
 
-  Query := 'Select synonym_name from all_synonyms '
+  Query := 'SELECT synonym_name from all_synonyms '
       + ' WHERE table_owner = UPPER(NVL(''' + words[0] + ''', table_owner))'
       + ' AND table_name = UPPER(''' + words[1] + ''')'
       + ' ORDER BY CASE WHEN synonym_owner = USER THEN 1 ELSE 2 END';
+  ShowMessage(Query);
   SQL_Execute(PChar(Query));
   index := SQL_FieldIndex('SYNONYM_NAME');
-  // Get first row. If several rows are expected -- rewrite query to get the most valuable result first (or aggregate results)
-  if not SQL_Eof then
+
+  Result := TStringList.Create;
+
+  while not SQL_Eof do
   begin
-    Result := SQL_Field(index);
+    Result.Add(SQL_Field(index));
   end;
+end;
+
+procedure ShowSynonymsByTable(const SelectedString: string) ;
+var
+  Synonyms: TStringList;
+begin
+  Synonyms := GetSynonymsByTable(SelectedString);
+  ShowMessage(Synonyms.Text);
 end;
 
 function getTableBySynonym(const SelectedString: string): string;
@@ -157,7 +173,7 @@ end;
 procedure OnMenuClick(Index: Integer);  cdecl;
 begin
   case Index of
-    1 : ShowMessage(IDE_GetCursorWord);
+    1 : ShowSynonymsByTable(IDE_GetCursorWord);
     2 : ShowMessage(IDE_GetCursorWord);
     3 : ShowMessage(IDE_GetCursorWord);
   end;
@@ -166,7 +182,9 @@ end;
 exports // The three basic export functions
   IdentifyPlugIn,
   CreateMenuItem,
-  OnMenuClick;
+  RegisterCallback,
+  OnMenuClick,
+  OnActivate;
 
 end.
 
