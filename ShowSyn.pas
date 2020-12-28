@@ -3,8 +3,12 @@ unit ShowSyn;
 interface
 
 uses
-  Windows, Dialogs, Classes;
-
+  {Winapi.Windows, Winapi.Messages, }Windows, Dialogs, Classes, SysUtils;
+type
+  TSearchObject = Record
+    owner: string;
+    name: string;
+  end;
 var
   PlugInID: Integer;
 
@@ -13,6 +17,7 @@ const // Description of this Plug-In (as displayed in Plug-In configuration dial
   pasteMenuName = 'Paste synonym by table';
 var
   IDE_GetCursorWord: function: PChar; cdecl;
+  IDE_SetText: function (Text: PChar): Bool; cdecl;
   SQL_Execute: function(SQL: PChar): Integer; cdecl;
   SQL_FieldCount: function: Integer; cdecl;
   SQL_Eof: function: Bool; cdecl;
@@ -21,12 +26,17 @@ var
   SQL_FieldName: function(Field: Integer): PChar; cdecl;
   SQL_FieldIndex: function(Name: PChar): Integer; cdecl;
   SQL_FieldType: function(Field: Integer): Integer; cdecl;
+  SQL_ErrorMessage: function: PChar; cdecl;
+
+  IDE_GetEditorHandle: function : Integer; cdecl;
+
+  IDE_GetCursorX: function : Integer; cdecl;
+  IDE_GetCursorY: function : Integer; cdecl;
+  IDE_SetCursor: procedure (X, Y: Integer); cdecl;  
 
   IDE_CreatePopupItem: procedure(ID, Index: Integer; Name, ObjectType: PChar); cdecl;
 
 implementation
-
-{$R *.DFM}
 
 // Plug-In identification, a unique identifier is received and
 // the description is returned
@@ -41,6 +51,8 @@ procedure RegisterCallback(Index: Integer; Addr: Pointer); cdecl;
 begin
   case Index of
     32 : @IDE_GetCursorWord := Addr;
+    33 : @IDE_GetEditorHandle := Addr;
+    34 : @IDE_SetText := Addr;
     40 : @SQL_Execute := Addr;
     41 : @SQL_FieldCount := Addr;
     42 : @SQL_Eof := Addr;
@@ -49,7 +61,12 @@ begin
     45 : @SQL_FieldName := Addr;
     46 : @SQL_FieldIndex := Addr;
     47 : @SQL_FieldType := Addr;
+    48 : @SQL_ErrorMessage := Addr;
     69 : @IDE_CreatePopupItem := Addr;
+    141 : @IDE_GetCursorX := Addr;
+    142 : @IDE_GetCursorY := Addr;
+    143 : @IDE_SetCursor := Addr;
+
   end;
 end;
 
@@ -80,102 +97,139 @@ begin
    ListOfStrings.DelimitedText   := Str;
 end;
 
-function ParseSelectedString(const SelectedString: string): TStringList;
+function ParseSelectedString(const SelectedString: string): TSearchObject;
 var
   words: TStringList;
 begin
   words := TStringList.Create;
   Split('.', SelectedString, words);
 
-  Result := TStringList.Create;
-
   if (words.count = 0) then
     begin
       ShowMessage('Empty string has been selected');
-      Result.add('');
-      Result.add('');
     end
   else if (words.count > 2) then
     begin
       ShowMessage('Wrong string is selected');
-      Result.add('');
-      Result.add('');
     end
   else if (words.count = 1) then
     begin
-      ShowMessage('one word ' + words[0]);
-      Result.add('');
-      Result.add(words[0]);
+      //ShowMessage('one word ' + words[0]);
+      Result.name := words[0];
     end
   else //2
     begin
-      ShowMessage('2 words ' + words[0] + '-' + words[1]);
-      Result.add(words[0]);
-      Result.add(words[1]);
+      //ShowMessage('2 words ' + words[0] + '-' + words[1]);
+      Result.owner := words[0];
+      Result.name := words[1];
     end
 end;
+
+function GetResultForQuery(const Query: string): TStringList;
+var
+  SqlResult: Integer;
+begin
+  Result := TStringList.Create;
+  SqlResult := SQL_Execute(PChar(Query));
+  if (SqlResult <> 0) then
+  begin
+    ShowMessage('Error ' +  IntTOStr(SqlResult) + ': ' + SQL_ErrorMessage);
+    exit;
+  end;
+
+  while not SQL_Eof do
+  begin
+    Result.Add(SQL_Field(0));
+    SQL_Next;
+  end;
+end;
+
+////////////////////////////////////////////////////////////////////////////////
 
 function GetSynonymsByTable(const SelectedString: string): TStringList;
 var
   Query: string;
-  index: Integer;
-
-  words: TStringList;
+  searchObject: TSearchObject;
 begin
-  words :=  ParseSelectedString(SelectedString);
-  ShowMessage(words[0] + '-' + words[1]);
+  searchObject :=  ParseSelectedString(SelectedString);
 
-  Query := 'SELECT synonym_name from all_synonyms '
-      + ' WHERE table_owner = UPPER(NVL(''' + words[0] + ''', table_owner))'
-      + ' AND table_name = UPPER(''' + words[1] + ''')'
-      + ' ORDER BY CASE WHEN synonym_owner = USER THEN 1 ELSE 2 END';
-  ShowMessage(Query);
-  SQL_Execute(PChar(Query));
-  index := SQL_FieldIndex('SYNONYM_NAME');
-
-  Result := TStringList.Create;
-
-  while not SQL_Eof do
-  begin
-    Result.Add(SQL_Field(index));
-  end;
+  Query := 'SELECT CASE WHEN owner != USER AND owner != ''PUBLIC'' THEN owner || ''.'' END || synonym_name AS synonym_name'
+      + ' FROM all_synonyms t'
+      + ' WHERE table_name = UPPER(''' + searchObject.name + ''')'
+      + '   AND table_owner = UPPER(NVL(''' + searchObject.owner + ''', owner))'
+      + ' ORDER BY CASE WHEN owner = USER THEN 1 WHEN owner = ''PUBLIC'' THEN 2 ELSE 3 END';
+  Result := GetResultForQuery(Query);
 end;
 
 procedure ShowSynonymsByTable(const SelectedString: string) ;
 var
-  Synonyms: TStringList;
+  FoundObjects: TStringList;
 begin
-  Synonyms := GetSynonymsByTable(SelectedString);
-  ShowMessage(Synonyms.Text);
+  FoundObjects := GetSynonymsByTable(SelectedString);
+  if FoundObjects.Count > 0 then
+    ShowMessage(FoundObjects.Text)
+  else
+    ShowMessage('No synonyms for table [' + SelectedString + ']');
 end;
 
-function getTableBySynonym(const SelectedString: string): string;
+procedure PasteSynonymsByTable(const SelectedString: string) ;
+var
+  FoundObjects: TStringList;
+  X, Y, windowHandle: Integer;
+  the_line : string;
+  Buffer  : string;
+begin
+  FoundObjects := GetSynonymsByTable(SelectedString);
+  if FoundObjects.Count = 1 then
+    begin
+      ShowMessage('Pasting ' + FoundObjects[0]);
+      windowHandle := IDE_GetEditorHandle;
+      sendmessage( windowHandle, $00C4 {em_getline}, 0, LongWord(PChar(the_line)));
+      ShowMessage(IntToStr(windowHandle) + ': ' + the_line);
+     end
+  else if FoundObjects.Count > 1 then
+    ShowMessage('Multiply synonyms found' + #13 + FoundObjects.Text)
+  else
+    ShowMessage('No synonyms for table [' + SelectedString + ']');
+end;
+
+////////////////////////////////////////////////////////////////////////////////
+
+function GetTableBySynonym(const SelectedString: string): TStringList;
 var
   Query: string;
-  index: Integer;
-  words: TStringList;
+  searchObject: TSearchObject;
 begin
-  words :=   ParseSelectedString(SelectedString);
+  searchObject :=   ParseSelectedString(SelectedString);
 
-  Query := 'Select  from all_synonyms '
-      + ' WHERE synonym_owner = UPPER(NVL(''' + words[0] + ''', synonym_owner))'
-      + ' AND synonym_name = UPPER(''' + words[1] + ''')';
-  SQL_Execute(PChar(Query));
-  index := SQL_FieldIndex('SYNONYM_NAME');
-  // Get first row. If several rows are expected -- rewrite query to get the most valuable result first (or aggregate results)
-  if not SQL_Eof then
-  begin
-    Result := SQL_Field(index);
-  end;
+  Query := 'SELECT table_owner || ''.'' || table_name from all_synonyms '
+      + ' WHERE owner = UPPER(NVL(''' + searchObject.owner + ''', owner))'
+      + ' AND synonym_name = UPPER(''' + searchObject.name + ''')'
+      + ' ORDER BY CASE WHEN owner = USER THEN 1 WHEN owner = ''PUBLIC'' THEN 2 ELSE 3 END';
+  GetResultForQuery(Query);
+
+  Result := GetResultForQuery(Query);
 end;
 
+procedure ShowTableBySynonym(const SelectedString: string) ;
+var
+  FoundObjects: TStringList;
+begin
+  FoundObjects := GetTableBySynonym(SelectedString);
+  if FoundObjects.Count > 0 then
+    ShowMessage(FoundObjects.Text)
+  else
+    ShowMessage('No tables for synonym [' + SelectedString + ']');
+end;
+
+////////////////////////////////////////////////////////////////////////////////
 // The menu item got selected
 procedure OnMenuClick(Index: Integer);  cdecl;
 begin
   case Index of
     1 : ShowSynonymsByTable(IDE_GetCursorWord);
-    2 : ShowMessage(IDE_GetCursorWord);
-    3 : ShowMessage(IDE_GetCursorWord);
+    2 : ShowTableBySynonym(IDE_GetCursorWord);
+    3 : PasteSynonymsByTable(IDE_GetCursorWord);
   end;
 end;
 
