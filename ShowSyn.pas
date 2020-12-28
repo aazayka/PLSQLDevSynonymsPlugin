@@ -3,7 +3,7 @@ unit ShowSyn;
 interface
 
 uses
-  {Winapi.Windows, Winapi.Messages, }Windows, Dialogs, Classes, SysUtils;
+  {Winapi.Windows, Winapi.Messages, }Windows, Dialogs, Classes, SysUtils, Clipbrd;
 type
   TSearchObject = Record
     owner: string;
@@ -14,7 +14,8 @@ var
 
 const // Description of this Plug-In (as displayed in Plug-In configuration dialog)
   Desc = 'Show Synonym plug-in';
-  pasteMenuName = 'Paste synonym by table';
+  ToClipboardMenuName = 'Copy synonym to clipboard';
+  InsertSynonymMenuName = 'Paste synonym to window';
 var
   IDE_GetCursorWord: function: PChar; cdecl;
   IDE_SetText: function (Text: PChar): Bool; cdecl;
@@ -32,7 +33,7 @@ var
 
   IDE_GetCursorX: function : Integer; cdecl;
   IDE_GetCursorY: function : Integer; cdecl;
-  IDE_SetCursor: procedure (X, Y: Integer); cdecl;  
+  IDE_SetCursor: procedure (X, Y: Integer); cdecl;
 
   IDE_CreatePopupItem: procedure(ID, Index: Integer; Name, ObjectType: PChar); cdecl;
 
@@ -77,16 +78,23 @@ begin
   case Index of
     1 : Result := 'NOVIS Synonyms / Show synonym by table';
     2 : Result := 'NOVIS Synonyms / Show table by synonym';
-    3 : Result := 'NOVIS Synonyms / ' + pasteMenuName;
+    3 : Result := 'NOVIS Synonyms / ' + ToClipboardMenuName;
+    4 : Result := 'NOVIS Synonyms / ' + InsertSynonymMenuName;
   end;
 end;
 
 procedure OnActivate; cdecl;
 begin
-  IDE_CreatePopupItem(PlugInID, 3, pasteMenuName, 'SQLWINDOW');
-  IDE_CreatePopupItem(PlugInID, 3, pasteMenuName, 'COMMANDWINDOW');
-  IDE_CreatePopupItem(PlugInID, 3, pasteMenuName, 'TESTWINDOW');
-  IDE_CreatePopupItem(PlugInID, 3, pasteMenuName, 'COMMANDWINDOW');
+  IDE_CreatePopupItem(PlugInID, 3, ToClipboardMenuName, 'SQLWINDOW');
+  IDE_CreatePopupItem(PlugInID, 3, ToClipboardMenuName, 'COMMANDWINDOW');
+  IDE_CreatePopupItem(PlugInID, 3, ToClipboardMenuName, 'TESTWINDOW');
+  IDE_CreatePopupItem(PlugInID, 3, ToClipboardMenuName, 'COMMANDWINDOW');
+
+  IDE_CreatePopupItem(PlugInID, 4, InsertSynonymMenuName, 'SQLWINDOW');
+  IDE_CreatePopupItem(PlugInID, 4, InsertSynonymMenuName, 'COMMANDWINDOW');
+  IDE_CreatePopupItem(PlugInID, 4, InsertSynonymMenuName, 'TESTWINDOW');
+  IDE_CreatePopupItem(PlugInID, 4, InsertSynonymMenuName, 'COMMANDWINDOW');
+
 end;
 
 procedure Split(Delimiter: Char; Str: string; ListOfStrings: TStrings) ;
@@ -172,7 +180,22 @@ begin
     ShowMessage('No synonyms for table [' + SelectedString + ']');
 end;
 
-procedure PasteSynonymsByTable(const SelectedString: string) ;
+procedure SynonymByTableToClipboard(const SelectedString: string) ;
+var
+  FoundObjects: TStringList;
+begin
+  FoundObjects := GetSynonymsByTable(SelectedString);
+  if FoundObjects.Count = 1 then
+    begin
+      Clipboard.AsText := FoundObjects[0];
+     end
+  else if FoundObjects.Count > 1 then
+    ShowMessage('Multiply synonyms found' + #13 + FoundObjects.Text)
+  else
+    ShowMessage('No synonyms for table [' + SelectedString + ']');
+end;
+
+procedure SynonymByTableToWindow(const SelectedString: string) ;
 var
   FoundObjects: TStringList;
   X, Y, windowHandle: Integer;
@@ -182,10 +205,7 @@ begin
   FoundObjects := GetSynonymsByTable(SelectedString);
   if FoundObjects.Count = 1 then
     begin
-      ShowMessage('Pasting ' + FoundObjects[0]);
-      windowHandle := IDE_GetEditorHandle;
-      sendmessage( windowHandle, $00C4 {em_getline}, 0, LongWord(PChar(the_line)));
-      ShowMessage(IntToStr(windowHandle) + ': ' + the_line);
+      Clipboard.AsText := FoundObjects[0];
      end
   else if FoundObjects.Count > 1 then
     ShowMessage('Multiply synonyms found' + #13 + FoundObjects.Text)
@@ -229,7 +249,9 @@ begin
   case Index of
     1 : ShowSynonymsByTable(IDE_GetCursorWord);
     2 : ShowTableBySynonym(IDE_GetCursorWord);
-    3 : PasteSynonymsByTable(IDE_GetCursorWord);
+    3 : SynonymByTableToClipboard(IDE_GetCursorWord);
+    4 : SynonymByTableToEditor(IDE_GetCursorWord);
+
   end;
 end;
 
