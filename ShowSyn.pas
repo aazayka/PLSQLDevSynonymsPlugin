@@ -3,12 +3,15 @@ unit ShowSyn;
 interface
 
 uses
-  {Winapi.Windows, Winapi.Messages, }Windows, Dialogs, Classes, SysUtils, Clipbrd;
+  Messages, Windows, Dialogs, Classes, SysUtils, Clipbrd, Controls;
 type
   TSearchObject = Record
     owner: string;
     name: string;
   end;
+
+  TSynonymAction = procedure(SynonymName: string);
+
 var
   PlugInID: Integer;
 
@@ -36,6 +39,8 @@ var
   IDE_SetCursor: procedure (X, Y: Integer); cdecl;
 
   IDE_CreatePopupItem: procedure(ID, Index: Integer; Name, ObjectType: PChar); cdecl;
+
+
 
 implementation
 
@@ -80,6 +85,7 @@ begin
     2 : Result := 'NOVIS Synonyms / Show table by synonym';
     3 : Result := 'NOVIS Synonyms / ' + ToClipboardMenuName;
     4 : Result := 'NOVIS Synonyms / ' + InsertSynonymMenuName;
+    5 : Result := 'NOVIS Synonyms / Set cursor';    
   end;
 end;
 
@@ -180,14 +186,15 @@ begin
     ShowMessage('No synonyms for table [' + SelectedString + ']');
 end;
 
-procedure SynonymByTableToClipboard(const SelectedString: string) ;
+// See TSynonymAction below
+procedure ProcessSynonymByTable(const SelectedString: string; SynonymAction: TSynonymAction) ;
 var
   FoundObjects: TStringList;
 begin
   FoundObjects := GetSynonymsByTable(SelectedString);
   if FoundObjects.Count = 1 then
     begin
-      Clipboard.AsText := FoundObjects[0];
+      SynonymAction(FoundObjects[0]);
      end
   else if FoundObjects.Count > 1 then
     ShowMessage('Multiply synonyms found' + #13 + FoundObjects.Text)
@@ -195,22 +202,77 @@ begin
     ShowMessage('No synonyms for table [' + SelectedString + ']');
 end;
 
-procedure SynonymByTableToWindow(const SelectedString: string) ;
-var
-  FoundObjects: TStringList;
-  X, Y, windowHandle: Integer;
-  the_line : string;
-  Buffer  : string;
+////////////////////////////////////////////////////////////////////////////////
+//TSynonymAction Synonym action
+procedure ToClipboard(Str: string);
 begin
-  FoundObjects := GetSynonymsByTable(SelectedString);
-  if FoundObjects.Count = 1 then
-    begin
-      Clipboard.AsText := FoundObjects[0];
-     end
-  else if FoundObjects.Count > 1 then
-    ShowMessage('Multiply synonyms found' + #13 + FoundObjects.Text)
-  else
-    ShowMessage('No synonyms for table [' + SelectedString + ']');
+  Clipboard.AsText := Str;
+end;
+
+function GetLineFromRichedit(REHandle: Integer; line: Integer ): WideString;
+var
+   LineIndex, LineLength, I: Integer;
+begin
+   Result := '';
+   LineIndex := SendMessageW(REHandle, EM_LINEINDEX, line, 0);
+   if LineIndex >= 0 then begin
+     LineLength := SendMessageW(REHandle, EM_LINELENGTH, LineIndex, 0);
+     if LineLength > 0 then begin
+       SetLength(Result, LineLength);
+       Result[1] := Widechar(LineLength);
+       I:= SendMessageW(REHandle, EM_GETLINE, line, LPARAM(PWideChar(Result)));
+       if I < LineLength then
+         SetLength(Result, I);
+     end; { if }
+   end; { if }
+end; { GetLineFromRichedit }
+
+function GetCursorPosition(REHandle: HWND): Integer;
+begin
+  Result := Lo(FindControl(REHandle).Perform(EM_GETSEL, 0, 0));
+end;
+
+function GetActiveLine(REHandle: Integer): WideString;
+var
+  Pos, ActiveLine: Integer;
+begin
+  //Get current cursor position (selection actually)
+  Pos := GetCursorPosition(REHandle);
+  ActiveLine := FindControl(REHandle).Perform(EM_LINEFROMCHAR, Pos, 0);
+
+  Result:= GetLineFromRichedit(REHandle, ActiveLine);
+end;
+
+procedure SetTextToPosition(REHandle: HWND; Const Str: String; X, Y: Integer);
+var
+  Pos: Integer;
+begin
+  //Move to position
+  //ShowMessage(format('Cursor position: (%d;%d)', [IDE_GetCursorX, IDE_GetCursorY]));
+  IDE_SetCursor(X, Y);
+  //ShowMessage(format('Cursor position: (%d;%d)', [IDE_GetCursorX, IDE_GetCursorY]));
+  SendMessage(REHandle, EM_REPLACESEL, 1, Longint(PChar(Str)));
+end;
+
+procedure ToEditor(Str: string);
+var
+  ActiveString: WideString;
+  i, Offset: Integer;
+  EditorHWND: Integer;
+const
+  VALID_SYMBOLS = ['0'..'9', 'a'..'z', 'A'..'Z', '.', '_', '@'];
+begin
+  EditorHWND := IDE_GetEditorHandle;
+  ActiveString := GetActiveLine(EditorHWND);
+  Offset := 0;
+  for i := IDE_GetCursorX to Length(ActiveString) do
+  begin
+    if not (Char(ActiveString[i]) in VALID_SYMBOLS) then
+      break;
+    Inc(Offset);
+  end;
+
+  SetTextToPosition(EditorHWND, ' ' + Str, i, IDE_GetCursorY);
 end;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -223,9 +285,9 @@ begin
   searchObject :=   ParseSelectedString(SelectedString);
 
   Query := 'SELECT table_owner || ''.'' || table_name from all_synonyms '
-      + ' WHERE owner = UPPER(NVL(''' + searchObject.owner + ''', owner))'
+      + ' WHERE owner IN (UPPER(''' + searchObject.owner + '''), USER, ''PUBLIC'')'
       + ' AND synonym_name = UPPER(''' + searchObject.name + ''')'
-      + ' ORDER BY CASE WHEN owner = USER THEN 1 WHEN owner = ''PUBLIC'' THEN 2 ELSE 3 END';
+      + ' ORDER BY CASE owner WHEN  UPPER(''' + searchObject.owner + ''') THEN 1 WHEN USER THEN 2 WHEN ''PUBLIC'' THEN 3 ELSE 4 END';
   GetResultForQuery(Query);
 
   Result := GetResultForQuery(Query);
@@ -242,6 +304,23 @@ begin
     ShowMessage('No tables for synonym [' + SelectedString + ']');
 end;
 
+procedure SetCursor();
+var
+  Str:String;
+
+  REHandle: HWND;
+begin
+  REHandle := IDE_GetEditorHandle;
+  Str :=  'XXX';
+
+  ShowMessage(format('Cursor position: (%d;%d)', [IDE_GetCursorX, IDE_GetCursorY]));
+  IDE_SetCursor(2,1);
+
+//  SendMessageW(REHandle, EM_SETSEL, 1, 1);
+  ShowMessage(format('Cursor position: (%d;%d)', [IDE_GetCursorX, IDE_GetCursorY]));
+
+  SendMessage(REHandle, EM_REPLACESEL, 1, Longint(PChar(Str)));
+end;
 ////////////////////////////////////////////////////////////////////////////////
 // The menu item got selected
 procedure OnMenuClick(Index: Integer);  cdecl;
@@ -249,8 +328,9 @@ begin
   case Index of
     1 : ShowSynonymsByTable(IDE_GetCursorWord);
     2 : ShowTableBySynonym(IDE_GetCursorWord);
-    3 : SynonymByTableToClipboard(IDE_GetCursorWord);
-    4 : SynonymByTableToEditor(IDE_GetCursorWord);
+    3 : ProcessSynonymByTable(IDE_GetCursorWord, ToClipboard);
+    4 : ProcessSynonymByTable(IDE_GetCursorWord, ToEditor);
+    5 : SetCursor();
 
   end;
 end;
