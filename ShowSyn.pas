@@ -85,7 +85,6 @@ begin
     2 : Result := 'NOVIS Synonyms / Show table by synonym';
     3 : Result := 'NOVIS Synonyms / ' + ToClipboardMenuName;
     4 : Result := 'NOVIS Synonyms / ' + InsertSynonymMenuName;
-    5 : Result := 'NOVIS Synonyms / Set cursor';    
   end;
 end;
 
@@ -304,23 +303,6 @@ begin
     ShowMessage('No tables for synonym [' + SelectedString + ']');
 end;
 
-procedure SetCursor();
-var
-  Str:String;
-
-  REHandle: HWND;
-begin
-  REHandle := IDE_GetEditorHandle;
-  Str :=  'XXX';
-
-  ShowMessage(format('Cursor position: (%d;%d)', [IDE_GetCursorX, IDE_GetCursorY]));
-  IDE_SetCursor(2,1);
-
-//  SendMessageW(REHandle, EM_SETSEL, 1, 1);
-  ShowMessage(format('Cursor position: (%d;%d)', [IDE_GetCursorX, IDE_GetCursorY]));
-
-  SendMessage(REHandle, EM_REPLACESEL, 1, Longint(PChar(Str)));
-end;
 ////////////////////////////////////////////////////////////////////////////////
 // The menu item got selected
 procedure OnMenuClick(Index: Integer);  cdecl;
@@ -330,8 +312,6 @@ begin
     2 : ShowTableBySynonym(IDE_GetCursorWord);
     3 : ProcessSynonymByTable(IDE_GetCursorWord, ToClipboard);
     4 : ProcessSynonymByTable(IDE_GetCursorWord, ToEditor);
-    5 : SetCursor();
-
   end;
 end;
 
